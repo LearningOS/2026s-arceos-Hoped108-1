@@ -67,6 +67,20 @@ impl DirNode {
         children.remove(name);
         Ok(())
     }
+
+    /// Renames a direct child node in this directory.
+    pub fn rename_node(&self, src_name: &str, dst_name: &str) -> VfsResult {
+        if src_name == dst_name {
+            return Ok(());
+        }
+        let mut children = self.children.write();
+        if children.contains_key(dst_name) {
+            return Err(VfsError::AlreadyExists);
+        }
+        let node = children.remove(src_name).ok_or(VfsError::NotFound)?;
+        children.insert(dst_name.into(), node);
+        Ok(())
+    }
 }
 
 impl VfsNodeOps for DirNode {
@@ -162,6 +176,58 @@ impl VfsNodeOps for DirNode {
             Err(VfsError::InvalidInput) // remove '.' or '..
         } else {
             self.remove_node(name)
+        }
+    }
+
+    fn rename(&self, src_path: &str, dst_path: &str) -> VfsResult {
+        log::debug!("rename at ramfs: {} -> {}", src_path, dst_path);
+        let (src_name, src_rest) = split_path(src_path);
+        let (dst_name, dst_rest) = split_path(dst_path);
+
+        match (src_rest, dst_rest) {
+            (Some(src_rest), Some(dst_rest)) => match src_name {
+                "" | "." => self.rename(src_rest, dst_rest),
+                ".." => self.parent().ok_or(VfsError::NotFound)?.rename(src_rest, dst_rest),
+                _ if src_name == dst_name => {
+                    let subdir = self
+                        .children
+                        .read()
+                        .get(src_name)
+                        .ok_or(VfsError::NotFound)?
+                        .clone();
+                    subdir.rename(src_rest, dst_rest)
+                }
+                _ => Err(VfsError::Unsupported), // move is not supported.
+            },
+            (None, None) => {
+                if src_name.is_empty()
+                    || src_name == "."
+                    || src_name == ".."
+                    || dst_name.is_empty()
+                    || dst_name == "."
+                    || dst_name == ".."
+                {
+                    Err(VfsError::InvalidInput)
+                } else {
+                    self.rename_node(src_name, dst_name)
+                }
+            }
+            (None, Some(dst_rest)) => {
+                let (new_name, new_rest) = split_path(dst_rest);
+                if new_rest.is_some()
+                    || src_name.is_empty()
+                    || src_name == "."
+                    || src_name == ".."
+                    || new_name.is_empty()
+                    || new_name == "."
+                    || new_name == ".."
+                {
+                    Err(VfsError::Unsupported)
+                } else {
+                    self.rename_node(src_name, new_name)
+                }
+            }
+            _ => Err(VfsError::Unsupported), // move is not supported.
         }
     }
 
